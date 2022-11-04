@@ -1,12 +1,12 @@
 {
     "name": "sdidb",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "packageManager": "pnpm@7.1.9",
     "type": "module",
     "files": [
         "dist"
     ],
-    "main": "./dist/index.es.js",
+    "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "scripts": {
         "build": "vite build",
@@ -21,9 +21,9 @@
     ],
     "author": "https://github.com/shaddollxz",
     "bugs": {
-        "url": "https://github.com/shaddollxz/SDT/issues"
+        "url": "https://github.com/shaddollxz/SDIDB"
     },
-    "homepage": "https://github.com/shaddollxz/SDT#readme",
+    "homepage": "https://github.com/shaddollxz/SDIDB#readme",
     "license": "ISC",
     "devDependencies": {
         "@types/fs-extra": "^9.0.13",
