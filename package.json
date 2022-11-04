@@ -1,0 +1,37 @@
+{
+    "name": "sdidb",
+    "version": "1.0.0",
+    "packageManager": "pnpm@7.1.9",
+    "type": "module",
+    "files": [
+        "dist"
+    ],
+    "main": "./dist/index.es.js",
+    "types": "./dist/index.d.ts",
+    "scripts": {
+        "build": "vite build",
+        "build:example": "tsc example/index.ts -t esnext -m esnext -moduleResolution node",
+        "test": "vitest",
+        "test:once": "vitest run"
+    },
+    "description": "使用typescirpt对indexDB的基本封装",
+    "keywords": [
+        "typeScript",
+        "indexDB"
+    ],
+    "author": "https://github.com/shaddollxz",
+    "bugs": {
+        "url": "https://github.com/shaddollxz/SDT/issues"
+    },
+    "homepage": "https://github.com/shaddollxz/SDT#readme",
+    "license": "ISC",
+    "devDependencies": {
+        "@types/fs-extra": "^9.0.13",
+        "@types/node": "^16.11.8",
+        "fs-extra": "^10.1.0",
+        "typescript": "^4.7.3",
+        "vite": "^2.9.12",
+        "vite-plugin-dts": "^1.2.0",
+        "vitest": "^0.18.0"
+    }
+}

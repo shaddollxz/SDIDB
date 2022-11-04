@@ -1,0 +1,12 @@
+import type { BaseType } from "../typings/utils";
+export declare const isNumber: (arg: unknown) => arg is number;
+export declare const isString: (arg: unknown) => arg is string;
+export declare const isBoolen: (arg: unknown) => arg is boolean;
+export declare const isSymbol: (arg: unknown) => arg is symbol;
+export declare const isNull: (arg: unknown) => arg is null;
+export declare const isUndefined: (arg: unknown) => arg is undefined;
+export declare const isBaseType: (arg: unknown) => arg is BaseType;
+export declare const isFunc: (arg: unknown) => arg is Function;
+export declare const isObject: (arg: unknown) => arg is Object;
+export declare const isRegExp: (arg: unknown) => arg is RegExp;
+export declare const isSameType: (arg: unknown, val: unknown) => val is unknown;
