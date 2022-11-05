@@ -3,26 +3,17 @@ import isSame from "./isSame";
 import removeItem from "./removeItem";
 import type { StringKeys, PickByType, SeparationArrayProperty } from "../typings/utils";
 
-let __DB__: Record<string, IDBDatabase> = {}; // 数据库，增删改查都在它身上进行
+const __DB__: Record<string, IDBDatabase> = {}; // 数据库，增删改查都在它身上进行
 
 type OpenDBMap = "create" | "remove";
-
 interface DefineIndexOption<KeyNames extends string> {
-    path?: KeyNames | KeyNames[];
-    unique?: boolean;
-    multiEntry?: boolean;
+    path?: KeyNames | KeyNames[]; // 索引对应的键名
+    unique?: boolean; // 索引能否有重复值
+    multiEntry?: boolean; // 和数组能否用元素检索有关
 }
-type Index<KeyNames extends string> = Record<
-    string,
-    {
-        path?: KeyNames | KeyNames[];
-        unique?: boolean;
-        multiEntry?: boolean;
-    }
->;
 interface DefineTableSetting<KeyNames extends string> {
     keypath?: string; // 数据库的主键 不指定时生成一个自增的主键
-    index?: Index<KeyNames>;
+    index?: Record<string, DefineIndexOption<KeyNames>>;
 }
 
 /**
@@ -33,7 +24,7 @@ interface DefineTableSetting<KeyNames extends string> {
  * const db = new SDIDB()
  * await db.open("test")
  *
- * const table = await db.defineTable("table", ["id", "key", "key2"], {
+ * const table = await db.defineTable("table", {
  *  keyPath: "id", // 设置主键
  *  index: { index1: { path: ["key", "key2"] } }, // 设置索引
  * });
@@ -43,29 +34,27 @@ interface DefineTableSetting<KeyNames extends string> {
 export default class SDIDB extends AsyncConstructor {
     protected declare _version: number; // 数据库版本 打开数据库时异步获取
     protected declare _tableList: string[]; // 表名列表
-    declare name: string;
+    protected declare _name: string;
     constructor(name?: string) {
         super(async () => {
             if (name) {
-                this.name = name;
+                this._name = name;
                 await this.openDB();
             }
         });
     }
 
-    /** 打开指定的数据库 如果异步实例化 不用调用该方法 */
+    /** 打开指定的数据库 如果异步实例化 不要调用该方法 */
     async open(dbname: string) {
-        if (this.name != dbname) {
-            this.name = dbname;
+        if (this._name == undefined) {
+            this._name = dbname;
             await this.openDB();
             return this;
-        } else {
-            console.error("数据库" + dbname + "已打开");
         }
     }
-    /** 关闭指定的数据库 */
-    close(dbname: string) {
-        __DB__[dbname].close();
+    /** 关闭数据库 */
+    close() {
+        __DB__[this.name].close();
     }
 
     /** 删除指定的表 */
@@ -77,7 +66,7 @@ export default class SDIDB extends AsyncConstructor {
     }
 
     /** 创建一个新的表 该表只能通过一个自增的主键key查找数据 */
-    async defineTable(tableName: string): Promise<IDBTable<any, any, any>>;
+    async defineTable(tableName: string): Promise<IDBTable<any, any>>;
     /**
      * 创建新的表
      * 该表只能放入指定类型的对象
@@ -88,20 +77,24 @@ export default class SDIDB extends AsyncConstructor {
      * @parmars settings 主键和索引
      */
     // prettier-ignore
-    async defineTable<TableType extends object, KeyPath extends StringKeys<PickByType<TableType, string | number>>, IndexNames extends string>(tableName: string, settings?: { keypath?: KeyPath; index?: Record<IndexNames, DefineIndexOption<StringKeys<TableType>>> }): Promise<IDBTable<KeyPath, IndexNames, TableType>>;
+    async defineTable<TableType extends object, IndexNames extends string>(tableName: string, settings?: { keypath?: StringKeys<PickByType<TableType, string | number>>; index?: Record<IndexNames, DefineIndexOption<StringKeys<TableType>>> }): Promise<IDBTable<TableType, IndexNames>>;
     // prettier-ignore
-    async defineTable<TableType extends object, KeyPath extends StringKeys<PickByType<TableType, string | number>>, IndexNames extends string>(tableName: string, settings?: { keypath?: KeyPath; index?: Record<IndexNames, DefineIndexOption<StringKeys<TableType>>> }) {
+    async defineTable<TableType extends object, IndexNames extends string>(tableName: string, settings?: { keypath?: StringKeys<PickByType<TableType, string | number>>; index?: Record<IndexNames, DefineIndexOption<StringKeys<TableType>>> }) {
         if (!this._tableList.includes(tableName)) {
             // 如果有缓存 先把它关闭再重新触发升级建表
             await this.openDB("create", tableName, settings);
             //// 这里已经被openDB中success的on_versionchange代替
             //// if (this.__DB__) {this.__DB__.close(); this.__DB__ = null;}
         }
-        return new IDBTable<KeyPath, IndexNames, TableType>(this.name, tableName, settings);
+        return new IDBTable<TableType, IndexNames>(this._name, tableName, settings);
     }
 
     /** 删库跑路 */
     static deleteDB(dbname: string) {
+        if (__DB__[dbname]) {
+            __DB__[dbname].close();
+            delete __DB__[dbname];
+        }
         window.indexedDB.deleteDatabase(dbname);
     }
 
@@ -111,6 +104,9 @@ export default class SDIDB extends AsyncConstructor {
     }
     get tables() {
         return this._tableList;
+    }
+    get name() {
+        return this._name;
     }
 
     /**
@@ -125,8 +121,8 @@ export default class SDIDB extends AsyncConstructor {
     private async openDB<KeyNames extends string>(type?: OpenDBMap, tableName?: string, settings: DefineTableSetting<KeyNames> = {}): Promise<void> {
         let DBRequest =
             type && this._version
-                ? window.indexedDB.open(this.name, ++this._version)
-                : window.indexedDB.open(this.name);
+                ? window.indexedDB.open(this._name, ++this._version)
+                : window.indexedDB.open(this._name);
 
         DBRequest.onerror = () => {
             throw "数据库打开失败";
@@ -191,7 +187,7 @@ export default class SDIDB extends AsyncConstructor {
                 const DB: IDBDatabase = (e.target as any).result;
                 // 在升级数据库时触发 关闭数据库 然后会用新版本重新打开 重新触发onsuccess
                 DB.onversionchange = () => DB.close();
-                __DB__[this.name] = DB; // 如果更新 DBcatch会关闭 要给它重新赋值
+                __DB__[this._name] = DB; // 如果更新 DBcatch会关闭 要给它重新赋值
                 this._version = DB.version;
                 this._tableList = Array.from(DB.objectStoreNames);
                 resolve(true);
@@ -213,7 +209,7 @@ interface UpdateOptions<TableType extends object> {
 }
 
 /** 数据库表 通过调用SDIDB的defineTable返回函数获得 */
-class IDBTable<KeyPath extends string, IndexNames extends string, TableType extends object> {
+class IDBTable<TableType extends object, IndexNames extends string> {
     protected store: IDBObjectStore;
     constructor(
         readonly dbName: string,
@@ -231,7 +227,7 @@ class IDBTable<KeyPath extends string, IndexNames extends string, TableType exte
     async insert(value: TableType, key: IDBValidKey): Promise<boolean>;
     async insert(value: TableType, key?: IDBValidKey) {
         // 插入前查看主键是否有重复
-        if (this.keypath && !(await this.findByKeypath(value[this.keypath])).length) {
+        if (this.keypath && (await this.findByKeypath(value[this.keypath])).length) {
             return false;
         }
         await this.CURDHandler(this.store.add(value, key));
@@ -296,7 +292,7 @@ class IDBTable<KeyPath extends string, IndexNames extends string, TableType exte
     /** 通过主键查找对应的数据 */
     async findByKeypath(keyPathValue: string | number): Promise<TableType[]> {
         const result = await this.CURDHandler(this.store.get(keyPathValue));
-        return Array.isArray(result) ? result : [result];
+        return result === undefined ? [] : Array.isArray(result) ? result : [result];
     }
     /** 通过索引查找 */
     async findByIndex(findOption: FindOptions<IndexNames>): Promise<TableType[]> {
@@ -306,7 +302,7 @@ class IDBTable<KeyPath extends string, IndexNames extends string, TableType exte
                 : this.store.index(findOption.index).getAll(findOption.query, findOption.count);
 
         const result = await this.CURDHandler(IDBrequest);
-        return Array.isArray(result) ? result : [result];
+        return result === undefined ? [] : Array.isArray(result) ? result : [result];
     }
     /** 查找符合条件的数据 性能远不如用主键或索引查找 */
     async find(query: TableType extends object ? Partial<TableType> : any): Promise<TableType[]> {
@@ -384,8 +380,8 @@ class IDBTable<KeyPath extends string, IndexNames extends string, TableType exte
     /** 获得该表有多少条数据 */
     async count(): Promise<number>;
     /** 获得指定范围内的数据条数 */
-    async count(key: KeyPath | IndexNames | IDBKeyRange): Promise<number>;
-    async count(key?: KeyPath | IndexNames | IDBKeyRange) {
+    async count(key: IDBValidKey | IDBKeyRange): Promise<number>;
+    async count(key?: IDBValidKey | IDBKeyRange) {
         return await this.CURDHandler(this.store.count(key));
     }
 
@@ -402,6 +398,23 @@ class IDBTable<KeyPath extends string, IndexNames extends string, TableType exte
         return this.tableSetting && this.tableSetting.index
             ? Object.keys(this.tableSetting.index)
             : undefined;
+    }
+
+    /** 将查找结果改为以主键为键的对象 */
+    keypathObj(data: TableType[]) {
+        if (this.keypath) {
+            if (data.length) {
+                const result: Record<string | number, TableType> = {};
+                for (const item of data) {
+                    result[item[this.keypath]] = item;
+                }
+                return result;
+            } else {
+                return null;
+            }
+        } else {
+            throw "需要设置主键";
+        }
     }
 
     private async CURDHandler(IDBRequest: IDBRequest) {
@@ -440,3 +453,5 @@ function changeProperties(changed: object, changedTo: object, methods: keyof Upd
             break;
     }
 }
+
+export type SDIDBTable<TableType extends object, IndexNames extends string> = IDBTable<TableType, IndexNames>;

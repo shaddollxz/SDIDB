@@ -2,7 +2,7 @@
 
 # Install
 
-`npm install sdidb``yarn add sdidb``pnpm add sdidb`
+` npm install sdidb``yarn add sdidb``pnpm add sdidb `
 
 # Usage
 
@@ -20,7 +20,7 @@ const _db = new SDIDB();
 await _db.open("dbName");
 
 // defined table
-// just a tablename, can save any data but search will be hard
+// just put a tablename, this table can save any data but search on it will be hard
 const _table = await db.defineTable("tablename");
 
 interface TableType {
@@ -30,7 +30,7 @@ interface TableType {
     obj: { data: string };
 }
 
-const table = await db.defineTable<TableType, "str", "index" | "arr">("tableName", {
+const table = await db.defineTable<TableType, "index" | "arr">("tableName", {
     keypath: "str",
     index: {
         index: { path: ["num", "arr"] },
@@ -47,12 +47,10 @@ await table.insert({ str: "data_two", num: 2, arr: ["a", "c"], obj: { data: "bbb
 console.log(await table.findByKeypath("data_one"));
 console.log(await table.findByIndex({ index: "arr", query: "a" })); // find array element
 console.log(await table.find({ obj: { data: "aaa" } })); // find object
-console.log(await table.findAll());
+console.log(await table.findAll()); // find all
 // update data
 await table.findByKeypathAndUpdate("data_one", { $inc: { num: 1 }, $push: { arr: "new data" } });
 // there are findByIndexAndUpdate update to do this
 // remove data
 await table.findByKeypathAndRemove("data_one");
-
 ```
-
