@@ -107,15 +107,165 @@ function removeItem(array, target, pullOrigin = false) {
   }
   return arr;
 }
-const __DB__ = {};
+function mathBase(methods) {
+  const method = Math[methods];
+  return function(number, precision = 0) {
+    if (precision) {
+      number = number + "e" + precision;
+      return +(method(+number) + "e" + -precision);
+    } else {
+      return method(+number);
+    }
+  };
+}
+const _mathMethods = {
+  ADD: {
+    getPoint: (point1, point2) => [point1 > point2 ? point1 : point2, point1 > point2 ? point1 : point2],
+    method: (num1, num2) => num1 + num2
+  },
+  SUB: {
+    getPoint: (point1, point2) => [point1 > point2 ? point1 : point2, point1 > point2 ? point1 : point2],
+    method: (num1, num2) => num1 - num2
+  },
+  MUL: {
+    getPoint: (point1, point2) => [point1 > point2 ? point1 : point2, point1 + point2],
+    method: (num1, num2) => num1 * num2
+  },
+  DIV: {
+    getPoint: (point1, point2) => [point1 > point2 ? point1 : point2, 0],
+    method: (num1, num2) => num1 / num2
+  }
+};
+function operateBase(type) {
+  const methods = _mathMethods[type];
+  return (num1, num2) => {
+    const str1 = "" + num1;
+    const str2 = "" + num2;
+    let num1_point = str1.lastIndexOf(".");
+    let num2_point = str2.lastIndexOf(".");
+    if (~num1_point && ~num2_point) {
+      num1_point = str1.length - 1 - num1_point;
+      num2_point = str2.length - 1 - num2_point;
+      const [point, finallyPiont] = methods.getPoint(num1_point, num2_point);
+      const add1 = +(num1 + "e" + point);
+      const add2 = +(num2 + "e" + point);
+      return +(methods.method(add1, add2) + "e" + -finallyPiont);
+    } else {
+      return methods.method(num1, num2);
+    }
+  };
+}
+class SDMath {
+}
+__publicField(SDMath, "round", mathBase("round"));
+__publicField(SDMath, "ceil", mathBase("ceil"));
+__publicField(SDMath, "floor", mathBase("floor"));
+__publicField(SDMath, "add", operateBase("ADD"));
+__publicField(SDMath, "sub", operateBase("SUB"));
+__publicField(SDMath, "mul", operateBase("MUL"));
+__publicField(SDMath, "div", operateBase("DIV"));
+function updateProperties(_original, updateOption) {
+  const original = deepClone(_original);
+  for (let updateMethod in updateOption) {
+    const changedTo = updateOption[updateMethod];
+    switch (updateMethod) {
+      case "$set": {
+        for (let key in changedTo) {
+          original[key] = changedTo[key];
+        }
+        break;
+      }
+      case "$inc": {
+        for (let key in changedTo) {
+          original[key] = SDMath.add(original[key], changedTo[key]);
+        }
+        break;
+      }
+      case "$mul": {
+        for (let key in changedTo) {
+          original[key] = SDMath.mul(original[key], changedTo[key]);
+        }
+        break;
+      }
+      case "$concat": {
+        for (let key in changedTo) {
+          original[key] += changedTo[key];
+        }
+        break;
+      }
+      case "$anti": {
+        for (const key of changedTo) {
+          original[key] = !original[key];
+        }
+        break;
+      }
+      case "$push": {
+        for (let key in changedTo) {
+          if (Array.isArray(changedTo[key])) {
+            original[key].push(...changedTo[key]);
+          } else {
+            original[key].push(changedTo[key]);
+          }
+        }
+        break;
+      }
+      case "$pop": {
+        for (let key in changedTo) {
+          if (original[key].length <= changedTo[key]) {
+            original[key].length = 0;
+          } else {
+            original[key].length = original[key].length - changedTo[key];
+          }
+        }
+        break;
+      }
+      case "$shift": {
+        for (let key in changedTo) {
+          if (original[key].length <= changedTo[key]) {
+            original[key].length = 0;
+          } else {
+            for (let i = 0; i < changedTo[key]; i++) {
+              original[key].shift();
+            }
+          }
+        }
+        break;
+      }
+      case "$unshift": {
+        for (let key in changedTo) {
+          if (Array.isArray(changedTo[key])) {
+            original[key].unshift(...changedTo[key]);
+          } else {
+            original[key].unshift(changedTo[key]);
+          }
+        }
+        break;
+      }
+      case "$pull": {
+        for (let key in changedTo) {
+          removeItem(original[key], changedTo[key], true);
+        }
+        break;
+      }
+    }
+  }
+  return original;
+}
+const DB_CACHE = {};
 class SDIDB extends AsyncConstructor {
   constructor(name) {
     super(() => __async(this, null, function* () {
-      if (name) {
+      if (name && !DB_CACHE[name]) {
         this._name = name;
         yield this.openDB();
+        DB_CACHE[name] = this;
       }
     }));
+    if (name) {
+      if (DB_CACHE[name]) {
+        return DB_CACHE[name];
+      }
+    }
   }
   open(dbname) {
     return __async(this, null, function* () {
@@ -123,11 +273,18 @@ class SDIDB extends AsyncConstructor {
         this._name = dbname;
         yield this.openDB();
         return this;
+      } else {
+        if (DB_CACHE[this._name])
+          return DB_CACHE[this._name];
       }
     });
   }
   close() {
-    __DB__[this.name].close();
+    this.__DB__.close();
+  }
+  delete() {
+    this.__DB__.close();
+    window.indexedDB.deleteDatabase(this._name);
   }
   removeTable(tableName) {
     return __async(this, null, function* () {
@@ -141,14 +298,10 @@ class SDIDB extends AsyncConstructor {
       if (!this._tableList.includes(tableName)) {
         yield this.openDB("create", tableName, settings);
       }
-      return new IDBTable(this._name, tableName, settings);
+      return new IDBTable(this.__DB__, tableName, settings);
     });
   }
   static deleteDB(dbname) {
-    if (__DB__[dbname]) {
-      __DB__[dbname].close();
-      delete __DB__[dbname];
-    }
     window.indexedDB.deleteDatabase(dbname);
   }
   get version() {
@@ -210,7 +363,7 @@ class SDIDB extends AsyncConstructor {
         DBRequest.onsuccess = (e) => {
           const DB = e.target.result;
           DB.onversionchange = () => DB.close();
-          __DB__[this._name] = DB;
+          this.__DB__ = DB;
           this._version = DB.version;
           this._tableList = Array.from(DB.objectStoreNames);
           resolve(true);
@@ -220,12 +373,16 @@ class SDIDB extends AsyncConstructor {
   }
 }
 class IDBTable {
-  constructor(dbName, tableName, tableSetting) {
+  constructor(db, tableName, tableSetting) {
     __publicField(this, "store");
-    this.dbName = dbName;
+    __publicField(this, "transaction");
+    __publicField(this, "dbName");
+    this.db = db;
     this.tableName = tableName;
     this.tableSetting = tableSetting;
-    this.store = __DB__[this.dbName].transaction(this.tableName, "readwrite").objectStore(this.tableName);
+    this.dbName = db.name;
+    this.transaction = db.transaction(tableName, "readwrite");
+    this.store = this.transaction.objectStore(this.tableName);
   }
   insert(value, key) {
     return __async(this, null, function* () {
@@ -256,30 +413,24 @@ class IDBTable {
   update(query, update, key) {
     return __async(this, null, function* () {
       let value = (yield this.find(query))[0];
-      for (const item in update) {
-        changeProperties(value, update[item], item);
-      }
-      yield this.CURDHandler(this.store.put(value, key));
+      const afterUpdate = updateProperties(value, update);
+      yield this.CURDHandler(this.store.put(afterUpdate));
       return value;
     });
   }
   findByKeypathAndUpdate(query, update) {
     return __async(this, null, function* () {
       let value = (yield this.findByKeypath(query))[0];
-      for (const item in update) {
-        changeProperties(value, update[item], item);
-      }
-      yield this.CURDHandler(this.store.put(value));
+      const afterUpdate = updateProperties(value, update);
+      yield this.CURDHandler(this.store.put(afterUpdate));
       return value;
     });
   }
   findByIndexAndUpdate(query, update) {
     return __async(this, null, function* () {
       let value = (yield this.findByIndex(query))[0];
-      for (const item in update) {
-        changeProperties(value, update[item], item);
-      }
-      yield this.CURDHandler(this.store.put(value));
+      const afterUpdate = updateProperties(value, update);
+      yield this.CURDHandler(this.store.put(afterUpdate));
       return value;
     });
   }
@@ -403,30 +554,6 @@ class IDBTable {
         };
       });
     });
-  }
-}
-function changeProperties(changed, changedTo, methods) {
-  switch (methods) {
-    case "$set":
-      for (const key in changedTo) {
-        changed[key] = changedTo[key];
-      }
-      break;
-    case "$push":
-      for (const key in changedTo) {
-        changed[key].push(changedTo[key]);
-      }
-      break;
-    case "$pull":
-      for (const key in changedTo) {
-        removeItem(changed[key], key, true);
-      }
-      break;
-    case "$inc":
-      for (const key in changedTo) {
-        changed[key] += changedTo[key];
-      }
-      break;
   }
 }
 export { SDIDB as default };

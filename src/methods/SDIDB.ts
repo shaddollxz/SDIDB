@@ -1,9 +1,11 @@
 import AsyncConstructor from "./AsyncConstructor";
 import isSame from "./isSame";
-import removeItem from "./removeItem";
-import type { StringKeys, PickByType, SeparationArrayProperty } from "../typings/utils";
+import updateProperties from "./updateProperties";
+import type { UpdatePropertiesOptions } from "./updateProperties";
+import type { StringKeys, PickByType } from "../typings/utils";
 
-const __DB__: Record<string, IDBDatabase> = {}; // 数据库，增删改查都在它身上进行
+// 通过该对象缓存创建过的数据库实例和表实例 实现单例
+const DB_CACHE = {};
 
 type OpenDBMap = "create" | "remove";
 interface DefineIndexOption<KeyNames extends string> {
@@ -32,16 +34,23 @@ interface DefineTableSetting<KeyNames extends string> {
  * let row = await table.findByKeypath("a");
  */
 export default class SDIDB extends AsyncConstructor {
+    protected declare __DB__: IDBDatabase;
     protected declare _version: number; // 数据库版本 打开数据库时异步获取
     protected declare _tableList: string[]; // 表名列表
     protected declare _name: string;
     constructor(name?: string) {
         super(async () => {
-            if (name) {
+            if (name && !DB_CACHE[name]) {
                 this._name = name;
                 await this.openDB();
+                DB_CACHE[name] = this;
             }
         });
+        if (name) {
+            if (DB_CACHE[name]) {
+                return DB_CACHE[name];
+            }
+        }
     }
 
     /** 打开指定的数据库 如果异步实例化 不要调用该方法 */
@@ -50,11 +59,18 @@ export default class SDIDB extends AsyncConstructor {
             this._name = dbname;
             await this.openDB();
             return this;
+        } else {
+            if (DB_CACHE[this._name]) return DB_CACHE[this._name];
         }
     }
-    /** 关闭数据库 */
+    /** 关闭本数据库 */
     close() {
-        __DB__[this.name].close();
+        this.__DB__.close();
+    }
+    /** 删除本数据库 */
+    delete() {
+        this.__DB__.close();
+        window.indexedDB.deleteDatabase(this._name);
     }
 
     /** 删除指定的表 */
@@ -81,20 +97,16 @@ export default class SDIDB extends AsyncConstructor {
     // prettier-ignore
     async defineTable<TableType extends object, IndexNames extends string>(tableName: string, settings?: { keypath?: StringKeys<PickByType<TableType, string | number>>; index?: Record<IndexNames, DefineIndexOption<StringKeys<TableType>>> }) {
         if (!this._tableList.includes(tableName)) {
-            // 如果有缓存 先把它关闭再重新触发升级建表
+            // 如果数据库中没有该表 先把数据库关闭再重新触发数据库升级事件建表
             await this.openDB("create", tableName, settings);
             //// 这里已经被openDB中success的on_versionchange代替
             //// if (this.__DB__) {this.__DB__.close(); this.__DB__ = null;}
         }
-        return new IDBTable<TableType, IndexNames>(this._name, tableName, settings);
+        return new IDBTable<TableType, IndexNames>(this.__DB__, tableName, settings);
     }
 
     /** 删库跑路 */
     static deleteDB(dbname: string) {
-        if (__DB__[dbname]) {
-            __DB__[dbname].close();
-            delete __DB__[dbname];
-        }
         window.indexedDB.deleteDatabase(dbname);
     }
 
@@ -138,7 +150,7 @@ export default class SDIDB extends AsyncConstructor {
         await this.onsuccess(DBRequest);
     }
 
-    //* 用来监听onupgradeneeded事件的函数 同时添加或删除表也是在里面进行
+    //* 监听数据库的onupgradeneeded事件 它内部会执行添加或删除表
     private async onupgradeneeded<KeyNames extends string>(
         DBRequest: IDBOpenDBRequest,
         type: OpenDBMap,
@@ -181,13 +193,14 @@ export default class SDIDB extends AsyncConstructor {
         });
     }
 
+    //* 监听打开数据库的onsuccess事件 它内部会监听数据库打开成功并将version tableList记录
     private async onsuccess(DBRequest: IDBOpenDBRequest): Promise<boolean> {
         return new Promise((resolve, reject) => {
             DBRequest.onsuccess = (e) => {
                 const DB: IDBDatabase = (e.target as any).result;
                 // 在升级数据库时触发 关闭数据库 然后会用新版本重新打开 重新触发onsuccess
                 DB.onversionchange = () => DB.close();
-                __DB__[this._name] = DB; // 如果更新 DBcatch会关闭 要给它重新赋值
+                this.__DB__ = DB; // 如果更新 DBcatch会关闭 要给它重新赋值
                 this._version = DB.version;
                 this._tableList = Array.from(DB.objectStoreNames);
                 resolve(true);
@@ -201,28 +214,23 @@ type FindOptions<IndexNames> = {
     index: IndexNames;
     count?: number;
 };
-interface UpdateOptions<TableType extends object> {
-    $set?: Partial<TableType>;
-    $inc?: Partial<PickByType<TableType, number>>;
-    $push?: Partial<SeparationArrayProperty<PickByType<TableType, any[]>>>;
-    $pull?: Partial<SeparationArrayProperty<PickByType<TableType, any[]>>>;
-}
 
 /** 数据库表 通过调用SDIDB的defineTable返回函数获得 */
 class IDBTable<TableType extends object, IndexNames extends string> {
-    protected store: IDBObjectStore;
+    readonly store: IDBObjectStore; // 所有封装方法实际都是对它进行操作
+    readonly transaction: IDBTransaction;
+    readonly dbName: string;
     constructor(
-        readonly dbName: string,
+        protected db: IDBDatabase,
         readonly tableName: string,
         readonly tableSetting?: DefineTableSetting<StringKeys<TableType>>
     ) {
-        this.store = __DB__[this.dbName].transaction(this.tableName, "readwrite").objectStore(this.tableName);
+        this.dbName = db.name;
+        this.transaction = db.transaction(tableName, "readwrite");
+        this.store = this.transaction.objectStore(this.tableName);
     }
-    /**
-     * 给表添加数据
-     * @async
-     * @param data 添加进表的数据 如果设定了主键必须为含主键的对象
-     */
+
+    /** 给表添加数据 */
     async insert(value: TableType): Promise<boolean>;
     async insert(value: TableType, key: IDBValidKey): Promise<boolean>;
     async insert(value: TableType, key?: IDBValidKey) {
@@ -256,36 +264,24 @@ class IDBTable<TableType extends object, IndexNames extends string> {
      * @param key 如果该表没有主键，会有一个自增长的主键key，把这个key放入，否则数据会被新增而不是更新
      */
     // prettier-ignore
-    async update(query: TableType extends object ? Partial<TableType> : any, update: UpdateOptions<TableType>, key?: IDBValidKey) {
+    async update(query: TableType extends object ? Partial<TableType> : any, update: UpdatePropertiesOptions<TableType>, key?: IDBValidKey) {
         let value = (await this.find(query))[0];
-
-        for (const item in update) {
-            changeProperties(value, update[item], item as keyof UpdateOptions<TableType>);
-        }
-
-        await this.CURDHandler( this.store.put(value, key));
+        const afterUpdate = updateProperties(value, update);
+        await this.CURDHandler(this.store.put(afterUpdate));
         return value;
     }
     /** 通过主键查找数据并更新 返回更新后的数据 */
-    async findByKeypathAndUpdate(query: string | number, update: UpdateOptions<TableType>) {
+    async findByKeypathAndUpdate(query: string | number, update: UpdatePropertiesOptions<TableType>) {
         let value = (await this.findByKeypath(query))[0];
-
-        for (const item in update) {
-            changeProperties(value, update[item], item as keyof UpdateOptions<TableType>);
-        }
-
-        await this.CURDHandler(this.store.put(value));
+        const afterUpdate = updateProperties(value, update);
+        await this.CURDHandler(this.store.put(afterUpdate));
         return value;
     }
     /** 通过索引查找数据并更新 返回更新后的数据 */
-    async findByIndexAndUpdate(query: FindOptions<IndexNames>, update: UpdateOptions<TableType>) {
+    async findByIndexAndUpdate(query: FindOptions<IndexNames>, update: UpdatePropertiesOptions<TableType>) {
         let value = (await this.findByIndex(query))[0];
-
-        for (const item in update) {
-            changeProperties(value, update[item], item as keyof UpdateOptions<TableType>);
-        }
-
-        await this.CURDHandler(this.store.put(value));
+        const afterUpdate = updateProperties(value, update);
+        await this.CURDHandler(this.store.put(afterUpdate));
         return value;
     }
 
@@ -338,8 +334,8 @@ class IDBTable<TableType extends object, IndexNames extends string> {
      * 不放入参数会查找所有数据
      */
     async findAll(): Promise<TableType[]>;
-    async findAll(key: StringKeys<TableType>): Promise<TableType[]>;
-    async findAll(key?: StringKeys<TableType>) {
+    async findAll(key: keyof TableType): Promise<TableType[]>;
+    async findAll(key?: keyof TableType) {
         const cursorFinder = this.store.openCursor();
 
         return new Promise((resolve, reject) => {
@@ -426,31 +422,6 @@ class IDBTable<TableType extends object, IndexNames extends string> {
                 reject((e.target as any).result);
             };
         });
-    }
-}
-
-function changeProperties(changed: object, changedTo: object, methods: keyof UpdateOptions<any>): void {
-    switch (methods) {
-        case "$set":
-            for (const key in changedTo) {
-                changed[key] = changedTo[key];
-            }
-            break;
-        case "$push":
-            for (const key in changedTo) {
-                changed[key].push(changedTo[key]);
-            }
-            break;
-        case "$pull":
-            for (const key in changedTo) {
-                removeItem(changed[key], key, true);
-            }
-            break;
-        case "$inc":
-            for (const key in changedTo) {
-                changed[key] += changedTo[key];
-            }
-            break;
     }
 }
 
